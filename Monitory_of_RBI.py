@@ -26,7 +26,7 @@ Features:
 - Bank credit dashboard (upload)
 - Rule-based insights (no external AI API)
 - Enhanced PDF export with charts
-- LIVE RBI policy rates, LAF daily liquidity, weekly M3 / RM / Deposits
+- NEW: RBI Live Data tab (Policy rates, LAF, M3, RM, Deposits)
 """
 
 import os
@@ -506,7 +506,7 @@ def compute_mpi_msi_and_insights(
 
 
 # --------------------
-# NEW: LIVE RBI DATA HELPERS
+# NEW: LIVE RBI DATA HELPERS (WSS Sections)
 # --------------------
 @st.cache_data
 def fetch_rbi_policy_rates_live():
@@ -520,7 +520,7 @@ def fetch_rbi_policy_rates_live():
 
         def find_rate(keyword):
             m = re.search(rf"{keyword}[^0-9]*([0-9]+\.?[0-9]*)", text, re.I)
-            return float(m.group(1)) if m else None
+            return float(m.group(1)) if m else np.nan
 
         df = pd.DataFrame({
             "Indicator": ["Repo Rate", "Reverse Repo", "MSF", "Bank Rate", "SDF"],
@@ -532,6 +532,7 @@ def fetch_rbi_policy_rates_live():
                 find_rate("Standing Deposit Facility"),
             ]
         })
+        df = df.dropna(subset=["Value"])
         return df
     except Exception:
         return pd.DataFrame()
@@ -539,57 +540,69 @@ def fetch_rbi_policy_rates_live():
 
 @st.cache_data
 def fetch_rbi_laf_daily():
-    """Fetch DAILY RBI liquidity: Net LAF, SDF, MSF, Call Money Rate."""
-    url = "https://www.rbi.org.in/Scripts/WSSViewDetail.aspx?TYPE=Section&ID=1"
+    """Fetch DAILY RBI Liquidity (LAF, MSF, SDF, Call Money) from WSS Section 1."""
+    url = "https://www.rbi.org.in/Scripts/WSS_Section1.aspx"
     headers = {"User-Agent": "Mozilla/5.0"}
+
     try:
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        rows = soup.find_all("tr")
-        data = []
-        for row in rows:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 2:
-                data.append(cols)
-
-        if not data:
+        # Table id for LAF daily data (may change if RBI updates page)
+        table = soup.find("table", {"id": "gvLAF"})
+        if table is None:
             return pd.DataFrame()
 
+        rows = table.find_all("tr")
+        data = []
+        for row in rows:
+            cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cols) >= 2 and cols[0]:
+                data.append(cols)
+
         df = pd.DataFrame(data, columns=["Field", "Value"])
-        df = df[df["Field"].str.contains("Net LAF|SDF|MSF|Call Money", case=False)]
+        df = df[df["Field"].str.contains("LAF|MSF|SDF|Call Money", case=False)]
         df["Value"] = pd.to_numeric(df["Value"].str.replace(",", ""), errors="coerce")
         df = df.dropna(subset=["Value"])
+
         return df
+
     except Exception:
         return pd.DataFrame()
 
 
 @st.cache_data
 def fetch_rbi_m3_weekly():
-    """Fetch WEEKLY M3, Reserve Money, Currency in Circulation, Deposits."""
-    url = "https://www.rbi.org.in/Scripts/WSSViewDetail.aspx?TYPE=Section&ID=8"
+    """Fetch WEEKLY Monetary Aggregates (M3, RM, Deposits) from WSS Section 8."""
+    url = "https://www.rbi.org.in/Scripts/WSS_Section8.aspx"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        rows = soup.find_all("tr")
-        data = []
-        for row in rows:
-            cols = [c.get_text(strip=True) for c in row.find_all("td")]
-            if len(cols) >= 2:
-                data.append(cols)
-
-        if not data:
+        # Table id for monetary aggregates (may change if RBI updates page)
+        table = soup.find("table", {"id": "gvMonetaryAgg"})
+        if table is None:
             return pd.DataFrame()
 
+        rows = table.find_all("tr")
+        data = []
+        for row in rows:
+            cols = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cols) >= 2 and cols[0]:
+                data.append(cols)
+
         df = pd.DataFrame(data, columns=["Indicator", "Value"])
-        df = df[df["Indicator"].str.contains("M3|Reserve Money|Currency in Circulation|Deposits", case=False)]
+        df = df[df["Indicator"].str.contains(
+            "M3|Reserve Money|Currency in Circulation|Deposits",
+            case=False
+        )]
         df["Value"] = pd.to_numeric(df["Value"].str.replace(",", ""), errors="coerce")
         df = df.dropna(subset=["Value"])
+
         return df
+
     except Exception:
         return pd.DataFrame()
 
@@ -615,11 +628,12 @@ liq_monthly = pd.DataFrame()
 repo_monthly = pd.DataFrame()
 
 # --------------------
-# TABS
+# TABS (NEW: RBI Live Data tab added)
 # --------------------
-overview_tab, liq_repo_tab, global_tab, fx_com_tab, forecast_tab, report_tab = st.tabs(
+overview_tab, rbi_live_tab, liq_repo_tab, global_tab, fx_com_tab, forecast_tab, report_tab = st.tabs(
     [
         "Overview",
+        "RBI Live Data",
         "Liquidity & Repo / Credit",
         "Global & Calendar",
         "FX & Commodities",
@@ -676,6 +690,88 @@ with overview_tab:
             ),
             use_container_width=True,
         )
+
+# --------------------
+# RBI LIVE DATA TAB
+# --------------------
+with rbi_live_tab:
+    st.subheader("🔵 RBI Live Dashboard — Policy Rates, Liquidity & Monetary Aggregates")
+
+    # --- Live Policy Rates ---
+    st.markdown("### LIVE RBI Policy Rates")
+    rbi_rates_live = fetch_rbi_policy_rates_live()
+    if not rbi_rates_live.empty:
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.dataframe(rbi_rates_live, use_container_width=True)
+        with c2:
+            core_rates = rbi_rates_live[
+                rbi_rates_live["Indicator"].isin(["Repo Rate", "MSF", "SDF", "Bank Rate"])
+            ]
+            if not core_rates.empty:
+                fig_p = px.bar(
+                    core_rates,
+                    x="Indicator",
+                    y="Value",
+                    title="RBI Policy Corridor — Repo, MSF, SDF, Bank Rate",
+                    template=PLOTLY_TEMPLATE,
+                    text_auto=".2f",
+                )
+                fig_p.update_layout(yaxis_title="Rate (%)")
+                st.plotly_chart(fig_p, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE RBI policy rates (Monetary Policy page).")
+
+    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
+
+    # --- Live Daily Liquidity (LAF / SDF / MSF / Call) ---
+    st.markdown("### LIVE Daily Liquidity (LAF, MSF, SDF, Call Money)")
+    laf_live = fetch_rbi_laf_daily()
+    if not laf_live.empty:
+        c3, c4 = st.columns([1, 2])
+        with c3:
+            st.dataframe(laf_live, use_container_width=True)
+        with c4:
+            fig_laf = px.bar(
+                laf_live,
+                x="Field",
+                y="Value",
+                title="RBI Daily Liquidity — Net LAF, SDF, MSF, Call Money",
+                template=PLOTLY_TEMPLATE,
+                text_auto=".0f",
+            )
+            fig_laf.update_layout(yaxis_title="₹ Crore (approx.)", xaxis_title="")
+            st.plotly_chart(fig_laf, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE daily liquidity from RBI (WSS Section 1).")
+
+    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
+
+    # --- Live Weekly Monetary Aggregates (M3, RM, Deposits) ---
+    st.markdown("### LIVE Weekly Monetary Aggregates (M3, Reserve Money, Deposits)")
+    m3_weekly_live = fetch_rbi_m3_weekly()
+    if not m3_weekly_live.empty:
+        c5, c6 = st.columns([1, 2])
+        with c5:
+            st.dataframe(m3_weekly_live, use_container_width=True)
+        with c6:
+            fig_m3 = px.bar(
+                m3_weekly_live,
+                x="Indicator",
+                y="Value",
+                title="Weekly Monetary Aggregates — M3, RM, Currency, Deposits",
+                template=PLOTLY_TEMPLATE,
+                text_auto=".0f",
+            )
+            fig_m3.update_layout(yaxis_title="₹ Crore (approx.)", xaxis_title="")
+            st.plotly_chart(fig_m3, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE weekly monetary aggregates from RBI (WSS Section 8).")
+
+    st.caption(
+        "Note: RBI WSS pages sometimes change structure. If a block fails, "
+        "you can still rely on uploaded CSVs in the Liquidity & Repo tab."
+    )
 
 # --------------------
 # LIQUIDITY & REPO / CREDIT TAB
@@ -883,67 +979,6 @@ with liq_repo_tab:
             )
         except Exception as e:
             st.warning(f"Failed to read Repo CSV: {e}")
-
-    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
-
-    # ---- NEW: LIVE RBI POLICY RATES ----
-    st.markdown("#### LIVE RBI Policy Rates (Auto-fetched)")
-    rbi_rates_live = fetch_rbi_policy_rates_live()
-    if not rbi_rates_live.empty:
-        st.dataframe(rbi_rates_live)
-        chart_rates = rbi_rates_live[
-            rbi_rates_live["Indicator"].isin(["Repo Rate", "MSF", "SDF"])
-        ]
-        if not chart_rates.empty:
-            fig_rbi_rates = px.bar(
-                chart_rates,
-                x="Indicator",
-                y="Value",
-                title="RBI Policy Rates — Repo, MSF, SDF",
-                template=PLOTLY_TEMPLATE,
-                color="Indicator",
-            )
-            st.plotly_chart(fig_rbi_rates, use_container_width=True)
-    else:
-        st.warning("Could not fetch LIVE RBI policy rates.")
-
-    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
-
-    # ---- NEW: LIVE DAILY LAF LIQUIDITY ----
-    st.markdown("#### LIVE RBI Daily Liquidity (LAF, SDF, MSF, Call Money)")
-    laf_live = fetch_rbi_laf_daily()
-    if not laf_live.empty:
-        st.dataframe(laf_live)
-        fig_laf = px.bar(
-            laf_live,
-            x="Field",
-            y="Value",
-            title="RBI Daily Liquidity — Net LAF, SDF, MSF, Call Money",
-            template=PLOTLY_TEMPLATE,
-            color="Field",
-        )
-        st.plotly_chart(fig_laf, use_container_width=True)
-    else:
-        st.warning("Could not fetch LIVE daily liquidity from RBI (LAF section).")
-
-    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
-
-    # ---- NEW: LIVE WEEKLY MONETARY AGGREGATES ----
-    st.markdown("#### LIVE Weekly Monetary Aggregates (M3, Reserve Money, Deposits)")
-    m3_weekly_live = fetch_rbi_m3_weekly()
-    if not m3_weekly_live.empty:
-        st.dataframe(m3_weekly_live)
-        fig_m3 = px.bar(
-            m3_weekly_live,
-            x="Indicator",
-            y="Value",
-            title="Weekly Monetary Aggregates — M3, RM, Currency, Deposits",
-            template=PLOTLY_TEMPLATE,
-            color="Indicator",
-        )
-        st.plotly_chart(fig_m3, use_container_width=True)
-    else:
-        st.warning("Could not fetch LIVE weekly monetary aggregates from RBI (M3 section).")
 
     st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
 
