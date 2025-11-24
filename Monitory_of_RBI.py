@@ -26,6 +26,7 @@ Features:
 - Bank credit dashboard (upload)
 - Rule-based insights (no external AI API)
 - Enhanced PDF export with charts
+- LIVE RBI policy rates, LAF daily liquidity, weekly M3 / RM / Deposits
 """
 
 import os
@@ -505,6 +506,95 @@ def compute_mpi_msi_and_insights(
 
 
 # --------------------
+# NEW: LIVE RBI DATA HELPERS
+# --------------------
+@st.cache_data
+def fetch_rbi_policy_rates_live():
+    """Fetch live RBI policy rates: Repo, Reverse Repo, MSF, Bank Rate, SDF."""
+    url = "https://www.rbi.org.in/scripts/BS_ViewMonetaryPolicy.aspx"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        text = soup.get_text(" ", strip=True)
+
+        def find_rate(keyword):
+            m = re.search(rf"{keyword}[^0-9]*([0-9]+\.?[0-9]*)", text, re.I)
+            return float(m.group(1)) if m else None
+
+        df = pd.DataFrame({
+            "Indicator": ["Repo Rate", "Reverse Repo", "MSF", "Bank Rate", "SDF"],
+            "Value": [
+                find_rate("Repo Rate"),
+                find_rate("Reverse Repo"),
+                find_rate("Marginal Standing Facility"),
+                find_rate("Bank Rate"),
+                find_rate("Standing Deposit Facility"),
+            ]
+        })
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data
+def fetch_rbi_laf_daily():
+    """Fetch DAILY RBI liquidity: Net LAF, SDF, MSF, Call Money Rate."""
+    url = "https://www.rbi.org.in/Scripts/WSSViewDetail.aspx?TYPE=Section&ID=1"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        rows = soup.find_all("tr")
+        data = []
+        for row in rows:
+            cols = [c.get_text(strip=True) for c in row.find_all("td")]
+            if len(cols) >= 2:
+                data.append(cols)
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data, columns=["Field", "Value"])
+        df = df[df["Field"].str.contains("Net LAF|SDF|MSF|Call Money", case=False)]
+        df["Value"] = pd.to_numeric(df["Value"].str.replace(",", ""), errors="coerce")
+        df = df.dropna(subset=["Value"])
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data
+def fetch_rbi_m3_weekly():
+    """Fetch WEEKLY M3, Reserve Money, Currency in Circulation, Deposits."""
+    url = "https://www.rbi.org.in/Scripts/WSSViewDetail.aspx?TYPE=Section&ID=8"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        rows = soup.find_all("tr")
+        data = []
+        for row in rows:
+            cols = [c.get_text(strip=True) for c in row.find_all("td")]
+            if len(cols) >= 2:
+                data.append(cols)
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data, columns=["Indicator", "Value"])
+        df = df[df["Indicator"].str.contains("M3|Reserve Money|Currency in Circulation|Deposits", case=False)]
+        df["Value"] = pd.to_numeric(df["Value"].str.replace(",", ""), errors="coerce")
+        df = df.dropna(subset=["Value"])
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+# --------------------
 # AUTO FETCH DATA
 # --------------------
 st.info("Auto-fetching key macro data (World Bank, FRED, RBI scraping).")
@@ -793,6 +883,67 @@ with liq_repo_tab:
             )
         except Exception as e:
             st.warning(f"Failed to read Repo CSV: {e}")
+
+    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
+
+    # ---- NEW: LIVE RBI POLICY RATES ----
+    st.markdown("#### LIVE RBI Policy Rates (Auto-fetched)")
+    rbi_rates_live = fetch_rbi_policy_rates_live()
+    if not rbi_rates_live.empty:
+        st.dataframe(rbi_rates_live)
+        chart_rates = rbi_rates_live[
+            rbi_rates_live["Indicator"].isin(["Repo Rate", "MSF", "SDF"])
+        ]
+        if not chart_rates.empty:
+            fig_rbi_rates = px.bar(
+                chart_rates,
+                x="Indicator",
+                y="Value",
+                title="RBI Policy Rates — Repo, MSF, SDF",
+                template=PLOTLY_TEMPLATE,
+                color="Indicator",
+            )
+            st.plotly_chart(fig_rbi_rates, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE RBI policy rates.")
+
+    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
+
+    # ---- NEW: LIVE DAILY LAF LIQUIDITY ----
+    st.markdown("#### LIVE RBI Daily Liquidity (LAF, SDF, MSF, Call Money)")
+    laf_live = fetch_rbi_laf_daily()
+    if not laf_live.empty:
+        st.dataframe(laf_live)
+        fig_laf = px.bar(
+            laf_live,
+            x="Field",
+            y="Value",
+            title="RBI Daily Liquidity — Net LAF, SDF, MSF, Call Money",
+            template=PLOTLY_TEMPLATE,
+            color="Field",
+        )
+        st.plotly_chart(fig_laf, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE daily liquidity from RBI (LAF section).")
+
+    st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
+
+    # ---- NEW: LIVE WEEKLY MONETARY AGGREGATES ----
+    st.markdown("#### LIVE Weekly Monetary Aggregates (M3, Reserve Money, Deposits)")
+    m3_weekly_live = fetch_rbi_m3_weekly()
+    if not m3_weekly_live.empty:
+        st.dataframe(m3_weekly_live)
+        fig_m3 = px.bar(
+            m3_weekly_live,
+            x="Indicator",
+            y="Value",
+            title="Weekly Monetary Aggregates — M3, RM, Currency, Deposits",
+            template=PLOTLY_TEMPLATE,
+            color="Indicator",
+        )
+        st.plotly_chart(fig_m3, use_container_width=True)
+    else:
+        st.warning("Could not fetch LIVE weekly monetary aggregates from RBI (M3 section).")
 
     st.markdown("<div class='rbi-divider'></div>", unsafe_allow_html=True)
 
