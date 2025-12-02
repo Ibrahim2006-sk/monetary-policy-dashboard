@@ -9,4 +9,8 @@ statsmodels
 reportlab
 kaleido
 yfinance
+yfinance
+html5lib
+lxml
+
 
