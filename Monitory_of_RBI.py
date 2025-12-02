@@ -1608,3 +1608,4 @@ with report_tab:
         "End of RBI-style monetary policy dashboard. "
         "If any auto-fetch failed, upload CSVs or check network/API keys."
     )
+
