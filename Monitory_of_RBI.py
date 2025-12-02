@@ -3,6 +3,8 @@
 Full RBI Monetary Policy Dashboard — Fixed & Themed
 Paste Segments 1, 2, 3 into a single file in order.
 """
+from auth import require_login, logout_button
+require_login()
 
 import os
 import re
@@ -1393,3 +1395,4 @@ with st.sidebar:
         pass
 
 # End of file
+
