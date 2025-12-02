@@ -307,7 +307,7 @@ def scrape_rbi_repo_rate():
             soup = BeautifulSoup(r.text, "html.parser")
             text = soup.get_text(separator=" ", strip=True)
             m = re.search(
-                r"Repo[ -]rate[^0-9\n\%\.]*([0-9]+\.?[0-9]*)", text, re.IGNORECASE
+                r"Repo[ -]rate[^0-9\n\%\.]([0-9]+\.?[0-9])", text, re.IGNORECASE
             )
             if m:
                 val = float(m.group(1))
@@ -519,7 +519,7 @@ def fetch_rbi_policy_rates_live():
         text = soup.get_text(" ", strip=True)
 
         def find_rate(keyword):
-            m = re.search(rf"{keyword}[^0-9]*([0-9]+\.?[0-9]*)", text, re.I)
+            m = re.search(rf"{keyword}[^0-9]([0-9]+\.?[0-9])", text, re.I)
             return float(m.group(1)) if m else np.nan
 
         df = pd.DataFrame({
@@ -1466,11 +1466,11 @@ with forecast_tab:
 
     st.markdown(
         f"""
-**Inflation trend (India):** {infl_trend}  
+*Inflation trend (India):* {infl_trend}  
 
-**Policy rate stance:** {rate_text}  
+*Policy rate stance:* {rate_text}  
 
-**Monetary stress assessment:** {stress_text}  
+*Monetary stress assessment:* {stress_text}  
 
 You can directly use these insights as commentary in your project report or presentation.
 """
@@ -1607,4 +1607,4 @@ with report_tab:
     st.caption(
         "End of RBI-style monetary policy dashboard. "
         "If any auto-fetch failed, upload CSVs or check network/API keys."
-    ) this is my code
+    )
